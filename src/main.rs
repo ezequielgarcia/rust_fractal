@@ -62,11 +62,6 @@ fn normalize(color: f32, factor: f32) -> u8 {
     ((color * factor).powf(0.8) * 255.) as u8
 }
 
-fn wait(_: String) -> Result<(), ()> {
-    thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
-    Ok(())
-}
-
 struct PixelDrawEvent {
     x: u32,
     y: u32,
@@ -109,7 +104,9 @@ fn main() {
                 let pixel_draw = PixelDrawEvent { x: x, y: y, color: pixel };
                 sender
                     .push_custom_event(pixel_draw)
-                    .or_else(wait).ok();
+                    .unwrap_or_else(|_| {
+                        thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+                    });
             }
         });
     }
