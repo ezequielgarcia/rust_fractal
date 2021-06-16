@@ -3,10 +3,9 @@ use sdl2::pixels::Color;
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::rect::Point;
-use std::sync::mpsc::channel;
-use std::time::Duration;
 use threadpool::ThreadPool;
 use std::thread;
+use std::time::{Duration, Instant};
 
 const WIDTH: u32 = 300;
 const HEIGHT: u32 = 300;
@@ -63,6 +62,17 @@ fn normalize(color: f32, factor: f32) -> u8 {
     ((color * factor).powf(0.8) * 255.) as u8
 }
 
+fn wait(_: String) -> Result<(), ()> {
+    thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+    Ok(())
+}
+
+struct PixelDrawEvent {
+    x: u32,
+    y: u32,
+    color: Color,
+}
+
 fn main() {
     let (width, height) = (WIDTH, HEIGHT);
     let iterations = 300;
@@ -75,25 +85,51 @@ fn main() {
         .build()
         .unwrap();
 
-    let mut canvas = window.into_canvas().build().unwrap();
+    let mut canvas = window
+        .into_canvas()
+        .build()
+        .unwrap();
+
     let mut event_pump = sdl_context.event_pump().unwrap();
+    let ev = sdl_context.event().unwrap();
+
+    /* Register a pixel draw event */
+    ev.register_custom_event::<PixelDrawEvent>().unwrap();
 
     let c = Complex::new(-0.8, 0.156);
 
     let pool = ThreadPool::new(num_cpus::get() * 2);
-    let (tx, rx) = channel();
 
     for y in 0..height {
-        let tx = tx.clone();
-        pool.execute(move || for x in 0..width {
-                         let i = julia(c, x, y, width, height, iterations);
-                         let pixel = wavelength_to_rgb(380 + i * 400 / iterations);
-                         tx.send((x, y, pixel)).expect("Could not send data!");
-                     });
+        let sender = ev.event_sender();
+        pool.execute(move || -> () {
+            for x in 0..width {
+                let i = julia(c, x, y, width, height, iterations);
+                let pixel = wavelength_to_rgb(380 + i * 400 / iterations);
+                let pixel_draw = PixelDrawEvent { x: x, y: y, color: pixel };
+                sender
+                    .push_custom_event(pixel_draw)
+                    .or_else(wait).ok();
+            }
+        });
     }
 
     'running: loop {
+        let start = Instant::now();
+
         for event in event_pump.poll_iter() {
+            if event.is_user_event() {
+                let pixel = event.as_user_event_type::<PixelDrawEvent>().unwrap();
+
+                canvas.set_draw_color(pixel.color);
+                canvas.draw_point(Point::new(pixel.x as i32, pixel.y as i32)).unwrap();
+
+                if start.elapsed() >= Duration::new(0, 1_000_000_000u32 / 60) {
+                    canvas.present();
+                }
+
+                continue;
+            }
             match event {
                 Event::Quit {..} |
                 Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
@@ -101,12 +137,6 @@ fn main() {
                 },
                 _ => {}
             }
-        }
-        let r = rx.recv_timeout(Duration::from_millis(300));
-        if let Ok((x, y, pixel)) = r { 
-            canvas.set_draw_color(pixel);
-            canvas.draw_point(Point::new(x as i32, y as i32)).unwrap();
-            canvas.present();
         }
     }
 }
